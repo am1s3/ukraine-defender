@@ -1,11 +1,11 @@
 // ============================================================
-// Ukraine Defender — api.ts (FULL)
-// Прямі адреси + всі функції
+// Ukraine Defender — api.ts (FINAL)
+// Data-запити: напряму, без кастомних заголовків, з ретраєм.
+// Auth-запити: через apiFetch з Bearer token.
 // ============================================================
 
 import type {
   AlertResponse,
-  ThreatEvent,
   NightResponse,
   AuthUser,
   AuthResponse,
@@ -16,24 +16,16 @@ import type {
   PasswordForgotPayload,
   PasswordForgotResponse,
   PasswordResetPayload,
-  SupportTicket,
-  SupportMessage,
   SupportTicketDetailResponse,
   SupportTicketListResponse,
   CreateSupportTicketPayload,
-  AdminUser,
   AdminUsersResponse,
   AdminTicketListResponse,
-  AdminAnalyticsSummary,
   AdminAnalyticsResponse,
-  AdminLogEntry,
   AdminLogsResponse,
-  AdminSourceStatusEntry,
   AdminSourceStatusResponse,
-  EventReport,
   AdminEventReportsResponse,
   CreateEventReportPayload,
-  SettingRow,
   AdminSettingsResponse,
   PublicSettingsResponse,
   PublicSourceStatusResponse,
@@ -42,17 +34,18 @@ import type {
   UserRole,
   SupportTicketStatus,
   EventReportStatus,
-  EventsResponse
+  EventsResponse,
+  PostsResponse
 } from "./types";
 
 // ============================================================
-// DIRECT ENDPOINTS
+// ENDPOINTS
 // ============================================================
 
-const DATA_API_BASE =
+export const DATA_API_BASE =
   "https://ukraine-defender-data.shushko-art.workers.dev";
 
-const AUTH_API_BASE =
+export const AUTH_API_BASE =
   "https://ukraine-defender-api.shushko-art.workers.dev";
 
 const TOKEN_KEY = "ud_token";
@@ -91,17 +84,13 @@ export function getToken(): string | null {
 export function setToken(token: string): void {
   try {
     localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    // storage unavailable
-  }
+  } catch {}
 }
 
 export function clearToken(): void {
   try {
     localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // storage unavailable
-  }
+  } catch {}
 }
 
 // ============================================================
@@ -121,7 +110,104 @@ export function isOwnerRole(role?: string | null): boolean {
 }
 
 // ============================================================
-// URL / FETCH CORE
+// DATA FETCH (DIRECT, NO CUSTOM HEADERS, WITH RETRY)
+// ============================================================
+
+async function fetchJsonDirect<T>(
+  url: string,
+  timeoutMs: number,
+  tries = 2
+): Promise<T> {
+  let lastError: unknown = null;
+
+  for (let i = 0; i < tries; i++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+    try {
+      // ВАЖЛИВО: ніяких кастомних заголовків → простий GET → без preflight.
+      const res = await fetch(url, { signal: ctrl.signal });
+
+      if (!res.ok) {
+        throw new ApiError(`HTTP ${res.status}`, res.status, null);
+      }
+
+      const data = (await res.json()) as T;
+
+      return data;
+    } catch (e) {
+      lastError = e;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError));
+}
+
+// ============================================================
+// DATA / MAP / EVENTS (DATA WORKER)
+// ============================================================
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  return fetchJsonDirect<HealthResponse>(
+    `${DATA_API_BASE}/api/health`,
+    10000
+  );
+}
+
+export async function fetchAlerts(): Promise<AlertResponse> {
+  const data = await fetchJsonDirect<AlertResponse>(
+    `${DATA_API_BASE}/api/alerts`,
+    20000,
+    2
+  );
+
+  if (!data || !Array.isArray(data.regions)) {
+    throw new Error("alerts: bad response shape");
+  }
+
+  return data;
+}
+
+export async function fetchEvents(
+  region: string = "kyiv"
+): Promise<EventsResponse> {
+  const data = await fetchJsonDirect<EventsResponse>(
+    `${DATA_API_BASE}/api/events?region=${encodeURIComponent(region)}`,
+    25000,
+    2
+  );
+
+  if (!data || !Array.isArray(data.events)) {
+    throw new Error("events: bad response shape");
+  }
+
+  return data;
+}
+
+export async function fetchPosts(
+  channel: string
+): Promise<PostsResponse> {
+  return fetchJsonDirect<PostsResponse>(
+    `${DATA_API_BASE}/api/posts?channel=${encodeURIComponent(channel)}`,
+    20000
+  );
+}
+
+export async function fetchNight(
+  hours: number = 12
+): Promise<NightResponse> {
+  return fetchJsonDirect<NightResponse>(
+    `${DATA_API_BASE}/api/night?hours=${hours}`,
+    25000
+  );
+}
+
+// ============================================================
+// AUTH FETCH CORE (AUTH WORKER)
 // ============================================================
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -135,15 +221,8 @@ export interface ApiRequestOptions {
   timeoutMs?: number;
 }
 
-function baseFor(path: string): string {
-  if (/^\/api\/(alerts|events|posts|night)/.test(path)) {
-    return DATA_API_BASE;
-  }
-  return AUTH_API_BASE;
-}
-
-function buildUrl(path: string, query?: QueryParams): string {
-  const base = baseFor(path).replace(/\/+$/, "");
+function buildAuthUrl(path: string, query?: QueryParams): string {
+  const base = AUTH_API_BASE.replace(/\/+$/, "");
   const url = new URL(`${base}${path}`, window.location.origin);
 
   if (query) {
@@ -182,7 +261,7 @@ export async function apiFetch<T = unknown>(
     options.method ?? (options.body !== undefined ? "POST" : "GET");
 
   try {
-    const res = await fetch(buildUrl(path, options.query), {
+    const res = await fetch(buildAuthUrl(path, options.query), {
       method,
       headers,
       body:
@@ -222,47 +301,6 @@ export async function apiFetch<T = unknown>(
 }
 
 // ============================================================
-// DATA / MAP / EVENTS (DATA WORKER)
-// ============================================================
-
-export async function fetchHealth(): Promise<HealthResponse> {
-  return apiFetch<HealthResponse>("/api/health", {
-    timeoutMs: 10000
-  });
-}
-
-export async function fetchAlerts(): Promise<AlertResponse> {
-  return apiFetch<AlertResponse>("/api/alerts", {
-    timeoutMs: 15000
-  });
-}
-
-export async function fetchEvents(
-  region: string = "kyiv"
-): Promise<EventsResponse> {
-  return apiFetch<EventsResponse>("/api/events", {
-    query: { region },
-    timeoutMs: 25000
-  });
-}
-
-export async function fetchPosts(channel: string) {
-  return apiFetch("/api/posts", {
-    query: { channel },
-    timeoutMs: 20000
-  });
-}
-
-export async function fetchNight(
-  hours: number = 12
-): Promise<NightResponse> {
-  return apiFetch<NightResponse>("/api/night", {
-    query: { hours },
-    timeoutMs: 25000
-  });
-}
-
-// ============================================================
 // AUTH (AUTH WORKER)
 // ============================================================
 
@@ -275,9 +313,7 @@ export function registerUser(
   });
 }
 
-export function loginUser(
-  payload: LoginPayload
-): Promise<AuthResponse> {
+export function loginUser(payload: LoginPayload): Promise<AuthResponse> {
   return apiFetch<AuthResponse>("/api/auth/login", {
     method: "POST",
     body: payload
@@ -299,10 +335,7 @@ export function updateProfile(
 ): Promise<{ ok: boolean; user: AuthUser }> {
   return apiFetch<{ ok: boolean; user: AuthUser }>(
     "/api/auth/profile",
-    {
-      method: "PATCH",
-      body: patch
-    }
+    { method: "PATCH", body: patch }
   );
 }
 
@@ -311,27 +344,21 @@ export function forgotPassword(
 ): Promise<PasswordForgotResponse> {
   return apiFetch<PasswordForgotResponse>(
     "/api/auth/password/forgot",
-    {
-      method: "POST",
-      body: payload
-    }
+    { method: "POST", body: payload }
   );
 }
 
 export function resetPassword(
   payload: PasswordResetPayload
 ): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    "/api/auth/password/reset",
-    {
-      method: "POST",
-      body: payload
-    }
-  );
+  return apiFetch<{ ok: boolean }>("/api/auth/password/reset", {
+    method: "POST",
+    body: payload
+  });
 }
 
 // ============================================================
-// PUBLIC SETTINGS / SOURCE STATUS (AUTH WORKER)
+// PUBLIC SETTINGS / SOURCE STATUS
 // ============================================================
 
 export function fetchPublicSettings(): Promise<PublicSettingsResponse> {
@@ -347,7 +374,7 @@ export function fetchPublicSourceStatus(): Promise<PublicSourceStatusResponse> {
 }
 
 // ============================================================
-// SUPPORT (AUTH WORKER)
+// SUPPORT
 // ============================================================
 
 export function listSupportTickets(): Promise<SupportTicketListResponse> {
@@ -359,10 +386,7 @@ export function createSupportTicket(
 ): Promise<{ ok: boolean; ticket_id: number }> {
   return apiFetch<{ ok: boolean; ticket_id: number }>(
     "/api/support/tickets",
-    {
-      method: "POST",
-      body: payload
-    }
+    { method: "POST", body: payload }
   );
 }
 
@@ -380,24 +404,19 @@ export function sendSupportMessage(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/support/tickets/${ticketId}/messages`,
-    {
-      method: "POST",
-      body: { body }
-    }
+    { method: "POST", body: { body } }
   );
 }
 
 // ============================================================
-// ADMIN / TICKETS (AUTH WORKER)
+// ADMIN / TICKETS
 // ============================================================
 
 export function listAdminTickets(
   status?: SupportTicketStatus | ""
 ): Promise<AdminTicketListResponse> {
   return apiFetch<AdminTicketListResponse>("/api/admin/tickets", {
-    query: {
-      status: status || undefined
-    }
+    query: { status: status || undefined }
   });
 }
 
@@ -407,10 +426,7 @@ export function sendAdminTicketMessage(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/admin/tickets/${ticketId}/messages`,
-    {
-      method: "POST",
-      body: { body }
-    }
+    { method: "POST", body: { body } }
   );
 }
 
@@ -419,9 +435,7 @@ export function closeAdminTicket(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/admin/tickets/${ticketId}/close`,
-    {
-      method: "POST"
-    }
+    { method: "POST" }
   );
 }
 
@@ -430,9 +444,7 @@ export function reopenAdminTicket(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/admin/tickets/${ticketId}/reopen`,
-    {
-      method: "POST"
-    }
+    { method: "POST" }
   );
 }
 
@@ -442,15 +454,12 @@ export function assignAdminTicket(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/admin/tickets/${ticketId}/assign`,
-    {
-      method: "POST",
-      body: { admin_id: adminId }
-    }
+    { method: "POST", body: { admin_id: adminId } }
   );
 }
 
 // ============================================================
-// ADMIN / USERS (AUTH WORKER)
+// ADMIN / USERS
 // ============================================================
 
 export function listAdminUsers(): Promise<AdminUsersResponse> {
@@ -461,13 +470,10 @@ export function setUserRole(
   userId: number,
   role: UserRole
 ): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/api/admin/users/${userId}/role`,
-    {
-      method: "POST",
-      body: { role }
-    }
-  );
+  return apiFetch<{ ok: boolean }>(`/api/admin/users/${userId}/role`, {
+    method: "POST",
+    body: { role }
+  });
 }
 
 export function setUserActive(
@@ -476,27 +482,20 @@ export function setUserActive(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/admin/users/${userId}/active`,
-    {
-      method: "POST",
-      body: { is_active: isActive }
-    }
+    { method: "POST", body: { is_active: isActive } }
   );
 }
 
 // ============================================================
-// ADMIN / ANALYTICS / SOURCES / LOGS (AUTH WORKER)
+// ADMIN / ANALYTICS / SOURCES / LOGS
 // ============================================================
 
 export function fetchAdminAnalyticsSummary(): Promise<AdminAnalyticsResponse> {
-  return apiFetch<AdminAnalyticsResponse>(
-    "/api/admin/analytics/summary"
-  );
+  return apiFetch<AdminAnalyticsResponse>("/api/admin/analytics/summary");
 }
 
 export function fetchAdminSourceStatus(): Promise<AdminSourceStatusResponse> {
-  return apiFetch<AdminSourceStatusResponse>(
-    "/api/admin/source-status"
-  );
+  return apiFetch<AdminSourceStatusResponse>("/api/admin/source-status");
 }
 
 export function fetchAdminLogs(): Promise<AdminLogsResponse> {
@@ -504,13 +503,11 @@ export function fetchAdminLogs(): Promise<AdminLogsResponse> {
 }
 
 // ============================================================
-// ADMIN / EVENT REPORTS (AUTH WORKER)
+// ADMIN / EVENT REPORTS
 // ============================================================
 
 export function fetchAdminEventReports(): Promise<AdminEventReportsResponse> {
-  return apiFetch<AdminEventReportsResponse>(
-    "/api/admin/event-reports"
-  );
+  return apiFetch<AdminEventReportsResponse>("/api/admin/event-reports");
 }
 
 export function setAdminEventReportStatus(
@@ -519,15 +516,12 @@ export function setAdminEventReportStatus(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
     `/api/admin/event-reports/${reportId}/status`,
-    {
-      method: "POST",
-      body: { status }
-    }
+    { method: "POST", body: { status } }
   );
 }
 
 // ============================================================
-// ADMIN / SETTINGS / CHANNELS (AUTH WORKER)
+// ADMIN / SETTINGS / CHANNELS
 // ============================================================
 
 export function fetchAdminSettings(): Promise<AdminSettingsResponse> {
@@ -554,7 +548,7 @@ export function updateAdminChannel(
 }
 
 // ============================================================
-// USER EVENT REPORTS (AUTH WORKER)
+// USER EVENT REPORTS
 // ============================================================
 
 export function createEventReport(
@@ -567,7 +561,7 @@ export function createEventReport(
 }
 
 // ============================================================
-// ANALYTICS (AUTH WORKER)
+// ANALYTICS
 // ============================================================
 
 export function trackAnalyticsEvent(
@@ -576,10 +570,7 @@ export function trackAnalyticsEvent(
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>("/api/analytics/event", {
     method: "POST",
-    body: {
-      name,
-      props: props ?? null
-    },
+    body: { name, props: props ?? null },
     timeoutMs: 8000
   });
 }
