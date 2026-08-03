@@ -124,12 +124,9 @@ function setupNavigation() {
       if (overlay) (overlay as HTMLElement).dataset.open = "true";
 
       if (target === "report") {
-        // ✅ ИСПРАВЛЕНО: проверяем что данные есть перед открытием
-        if (lastData && lastEvents) {
-          void summaryOverlay.open(lastData, lastEvents, lastNight);
-        } else {
-          toast({ text: "Дані ще завантажуються...", kind: "info" });
-        }
+        // ✅ ИСПРАВЛЕНО: правильный порядок параметров
+        // open(events: ThreatEvent[], alerts: AlertResponse | null, night: NightResponse | null)
+        void summaryOverlay.open(lastEvents, lastData, lastNight);
       }
     });
   });
