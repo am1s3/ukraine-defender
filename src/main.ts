@@ -6,7 +6,7 @@ import { SummaryOverlay } from "./summary";
 import type { AlertResponse, ThreatEvent, NightResponse, Region } from "./types";
 
 // ============================================================
-// 🔥 NEW: ERROR HANDLING
+// ERROR HANDLING
 // ============================================================
 window.addEventListener("unhandledrejection", (e) => {
   console.error("[UD] Unhandled rejection:", e.reason);
@@ -52,10 +52,10 @@ async function pollAlerts() {
 
     console.log(`[UD] Alerts: ${data.active_alerts} active`);
 
-    // 🔥 NEW: обновляем карту с тривогами
+    // Обновляем карту с тривогами
     map.updateAlerts(data.regions);
 
-    // 🔥 NEW: обновляем status strip
+    // Обновляем status strip
     updateStatusStrip(data.regions);
 
   } catch (e) {
@@ -82,7 +82,7 @@ async function pollEvents() {
 }
 
 // ============================================================
-// 🔥 NEW: STATUS STRIP
+// STATUS STRIP
 // ============================================================
 function updateStatusStrip(regions: Region[]) {
   const strip = document.getElementById("statusStrip");
@@ -149,7 +149,7 @@ function setupNavigation() {
 }
 
 // ============================================================
-// 🔥 NEW: KEYBOARD
+// KEYBOARD
 // ============================================================
 function setupKeyboard() {
   document.addEventListener("keydown", (e) => {
@@ -200,7 +200,7 @@ updateClock();
 async function init() {
   console.log("[UD] Initializing...");
   setupNavigation();
-  setupKeyboard(); // 🔥 NEW
+  setupKeyboard();
 
   await pollAlerts();
   startPolling();
