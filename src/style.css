@@ -2861,3 +2861,17 @@ html[data-theme="light"] .admin__stat b {
     scroll-behavior: auto !important;
   }
 }
+
+/* ============================================================ */
+/* ПУЛЬСАЦИЯ РЕГИОНОВ ПРИ ТРИВОГЕ                               */
+/* ============================================================ */
+
+@keyframes regionPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+.event-marker {
+  background: transparent !important;
+  border: none !important;
+}
